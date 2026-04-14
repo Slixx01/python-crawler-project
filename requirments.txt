@@ -1,0 +1,11 @@
+fastAPI
+httpx
+uvicorn
+BeautifulSoup4
+Motor
+Pydantic
+python-dotenv
+apscheduler
+pytest
+pytest-asyncio
+email-validator
