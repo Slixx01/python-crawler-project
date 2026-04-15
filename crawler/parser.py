@@ -9,11 +9,12 @@ from utilities.database import book_collection
 from datetime import datetime, UTC
 from models.book import Book 
 
+
 full_URL = 'https://books.toscrape.com/'
 
-async def scrape_book_details(client, book_url): 
-
-    response = await client.get(book_url)
+async def scrape_book_details(client, book_url, limitation): 
+    async with limitation:
+        response = await client.get(book_url)
     soup = BeautifulSoup(response.text, 'html.parser')
     title = soup.find('h1').text
     description_raw = soup.find('article',class_='product_page').find_all('p')[3].text
@@ -86,14 +87,16 @@ async def main():
 
     all_book_data = []
     current_url = full_URL
-
+    limitation = asyncio.Semaphore(5)
+    
     async with httpx.AsyncClient() as client: 
-        while current_url or current_url != None:
+        while current_url:
             response = await client.get(current_url)
             soup = BeautifulSoup(response.text, "html.parser")
-
             #Raw metadata  
             raw_html = response.text
+            page_tasks = []
+            book_urls = []
 
 
             for container in soup.find_all('div',class_='image_container'):
@@ -101,23 +104,32 @@ async def main():
                 if anchor_tag:
                     href = anchor_tag.get('href')
                     book_url = urljoin(current_url, href)
-                    print(f"Scrapping: {book_url}")
-                    book_details = await scrape_book_details(client, book_url)
-                    book_details['source_url'] = book_url
-                    book_details['raw_html'] = raw_html
-                    book_details['status'] = "scraped"
-                    book_details['crawl_timestamp'] = datetime.now(UTC)
-                    book_details['content_hash'] = await generate_content_hash(book_details)
-                    book_model = Book(**book_details)
+                    book_urls.append(book_url)
+                    page_tasks.append(scrape_book_details(client, book_url, limitation))
+            print(f"Batch Scrape {len(page_tasks)} books...")
+            results = await asyncio.gather(*page_tasks)
+            
+            page_documents = []
+
+            for book_data, source_url in zip(results, book_urls):
+                 if book_data: 
+                    book_data['source_url'] = source_url
+                    book_data['raw_html'] = raw_html
+                    book_data['status'] = "scraped"
+                    book_data['crawl_timestamp'] = datetime.now(UTC)
+                    book_data['content_hash'] = await generate_content_hash(book_data)
+                    
+                    book_model = Book(**book_data)
                     book_document = book_model.model_dump(mode="json")
-
-                    try: 
-                        await book_collection.insert_one(book_document)
-                        all_book_data.append(book_document)
-                        print(f"successfully scraped {len(all_book_data)} books.") 
-                    except Exception as e:
-                        print(f"Skipping or Error: {e}")
-
+                    page_documents.append(book_document)
+            if page_documents:
+                try:
+                    await book_collection.insert_many(page_documents)
+                    all_book_data.extend(page_documents)
+                    print(f"Successfully saved batch: Total saved{len(all_book_data)}")
+                except Exception as e:
+                    print(f"Database error {e}")
+       
             next_tag = soup.find('li',class_= 'next')
             if next_tag: 
                 next_ref = next_tag.find('a').get('href')
