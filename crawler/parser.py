@@ -5,7 +5,7 @@ import httpx
 import asyncio
 from decimal import Decimal  
 from urllib.parse import urljoin
-from utilities.database import book_collection
+from utilities.database import book_collection, change_log_detection, run_setup
 from datetime import datetime, UTC
 from models.book import Book 
 
@@ -15,6 +15,7 @@ full_URL = 'https://books.toscrape.com/'
 async def scrape_book_details(client, book_url, limitation): 
     async with limitation:
         response = await client.get(book_url)
+
     soup = BeautifulSoup(response.text, 'html.parser')
     title = soup.find('h1').text
     description_raw = soup.find('article',class_='product_page').find_all('p')[3].text
@@ -55,9 +56,6 @@ async def scrape_book_details(client, book_url, limitation):
 
     rating_number = rating_map.get(rating_word, 0)
 
- 
-
-
     return {
         "name": title,
         "description": description_raw,
@@ -84,7 +82,7 @@ async def generate_content_hash(book_data: dict) -> str:
 
 
 async def main(): 
-
+    await run_setup()
     all_book_data = []
     current_url = full_URL
     limitation = asyncio.Semaphore(5)
@@ -98,7 +96,6 @@ async def main():
             page_tasks = []
             book_urls = []
 
-
             for container in soup.find_all('div',class_='image_container'):
                 anchor_tag = container.find('a')
                 if anchor_tag:
@@ -109,23 +106,57 @@ async def main():
             print(f"Batch Scrape {len(page_tasks)} books...")
             results = await asyncio.gather(*page_tasks)
             
-            page_documents = []
+            new_books = []
+            content_check =  ["name", "availability", "rating", "price_incl_tax"]
+           
 
             for book_data, source_url in zip(results, book_urls):
+                 existing_book = await book_collection.find_one({"source_url":source_url})
+                 current_content_hash = await generate_content_hash(book_data)
+
                  if book_data: 
                     book_data['source_url'] = source_url
                     book_data['raw_html'] = raw_html
                     book_data['status'] = "scraped"
                     book_data['crawl_timestamp'] = datetime.now(UTC)
-                    book_data['content_hash'] = await generate_content_hash(book_data)
+                    book_data['content_hash'] = current_content_hash
                     
                     book_model = Book(**book_data)
                     book_document = book_model.model_dump(mode="json")
-                    page_documents.append(book_document)
-            if page_documents:
+                    
+
+                 if existing_book:
+
+                    if existing_book["content_hash"] != current_content_hash:
+                        print(f"Changes found in {source_url}")
+                        changed_values = {}
+                        
+                        for field in content_check:
+                            if book_data[field] != existing_book.get(field):
+                                changed_values[field] = {
+                                    "old_value :" : existing_book.get(field),
+                                    "new_value :" : book_document[field]}
+                                
+                        if changed_values: 
+                            change_log = {
+                                "source_url": source_url,
+                                "timestamp" : datetime.now(UTC),
+                                "changes": changed_values
+                            }
+                            await change_log_detection.insert_one(change_log)
+                        await book_collection.replace_one({"source_url": source_url}, book_document)    
+                    else:
+                        print("No changes found")
+                 else:
+                     new_books.append(book_document)
+                
+                 
+                 
+
+            if new_books:
                 try:
-                    await book_collection.insert_many(page_documents)
-                    all_book_data.extend(page_documents)
+                    await book_collection.insert_many(new_books)
+                    all_book_data.extend(new_books)
                     print(f"Successfully saved batch: Total saved{len(all_book_data)}")
                 except Exception as e:
                     print(f"Database error {e}")
