@@ -55,3 +55,8 @@ Generate a key by running: `python -c "import secrets; print(secrets.token_hex(3
 Tests
 
 pytest tests/test_api.py -v
+
+
+OPERATION 
+
+TO WORK WITH THE API JUST ADD /docs AT THE END OF THE LOCAL HOST URL AND THEN AUTHORIZE THE API WITH THE EVIORMENTAL API KEY TO ACCESS AND CHECK THE DETAILS
