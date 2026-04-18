@@ -8,9 +8,11 @@ from urllib.parse import urljoin
 from utilities.database import book_collection, change_log_detection, run_setup
 from datetime import datetime, UTC
 from models.book import Book 
+from utilities.logger import get_logger
 
 
 full_URL = 'https://books.toscrape.com/'
+logger = get_logger("crawler")
 
 async def scrape_book_details(client, book_url, limitation, raw_html_from_page): 
     max_retires = 3
@@ -21,9 +23,9 @@ async def scrape_book_details(client, book_url, limitation, raw_html_from_page):
             break
         except httpx.ReadTimeout:
             if attempt == max_retires - 1:
-                print(f"Failed after {max_retires} attemps: {book_url}")
+                logger.warning(f"Failed after {max_retires} attempts: {book_url}")
                 return None
-            print(f"Timeout on {book_url}, retyring... ({attempt +1}/{max_retires})")
+            logger.warning(f"Timeout on {book_url}, retyring... ({attempt +1}/{max_retires})")
             await asyncio.sleep(2) 
 
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -120,7 +122,7 @@ async def main():
                     book_url = urljoin(current_url, href)
                     book_urls.append(book_url)
                     page_tasks.append(scrape_book_details(client, book_url, limitation, raw_html))
-            print(f"Batch Scrape {len(page_tasks)} books...")
+            logger.info(f"Batch scraping {len(page_tasks)} books...")
             results = [result for result in await asyncio.gather(*page_tasks) if result is not None]
             
             new_books = []
@@ -161,9 +163,10 @@ async def main():
                 try:
                     await book_collection.insert_many(new_books)
                     all_book_data.extend(new_books)
-                    print(f"Successfully saved batch: Total saved{len(all_book_data)}")
+                    logger.info(f"Successfully saved batch: Total saved{len(all_book_data)}")
                 except Exception as e:
-                    print(f"Database error {e}")
+                    logger.warning(f"Database error {e}")
+                    
 
             await asyncio.sleep(1)
             next_tag = soup.find('li',class_= 'next')
@@ -171,7 +174,8 @@ async def main():
                 next_ref = next_tag.find('a').get('href')
                 current_url = urljoin(current_url, next_ref)
             else: 
-                print("No more pages to scrape.")
+                logger.info("No more pages to scrape.")
+                
                 current_url = None
     return all_book_data
       

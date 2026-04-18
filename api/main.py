@@ -1,10 +1,36 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Request, Security, status
+from fastapi.security import APIKeyHeader
 from fastapi.responses import RedirectResponse
 from utilities.database import book_collection, change_log_detection
 from bson import ObjectId
-app = FastAPI()
+import os 
+from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
-@app.get("/")
+API_KEY_NAME = "X-API-KEY"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+load_dotenv()
+valid_api_key = os.getenv("API_KEY")
+
+async def get_api_key(api_key: str = Security(api_key_header)):
+    if api_key == valid_api_key:
+        return api_key
+    raise HTTPException(
+        status_code= status.HTTP_403_FORBIDDEN,
+        detail="Could not validate credentials"
+    )
+
+app = FastAPI(dependencies=[Depends(get_api_key)])
+
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.get("/", dependencies=[])
+
 async def redirect_to_docs():
     return RedirectResponse(url="/docs")
 
@@ -13,7 +39,9 @@ from fastapi import Query
 from typing import Optional
 
 @app.get("/books")
+@limiter.limit("100/hour")
 async def get_books(
+    request: Request,
     category: Optional[str] =Query(None),
     min_price: Optional[float] =Query(None),
     max_price: Optional[float] = Query(None),
@@ -66,7 +94,8 @@ async def get_books(
 
 
 @app.get("/books/{book_id}")
-async def get_book_by_id(book_id: str):
+@limiter.limit("100/hour")
+async def get_book_by_id(book_id: str, request: Request):
     try:
         object_id = ObjectId(book_id)
     except Exception :
@@ -82,6 +111,7 @@ async def get_book_by_id(book_id: str):
 
 
 @app.get("/changes")
-async def get_book_changes():
+@limiter.limit("100/hour")
+async def get_book_changes(request:Request):
     changes = await change_log_detection.find({}, {"_id": 0}).to_list(length=None)
     return changes
