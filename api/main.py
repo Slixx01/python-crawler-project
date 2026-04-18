@@ -22,7 +22,9 @@ async def get_api_key(api_key: str = Security(api_key_header)):
         detail="Could not validate credentials"
     )
 
-app = FastAPI(dependencies=[Depends(get_api_key)])
+app = FastAPI(dependencies=[Depends(get_api_key)],
+              docs_url="/docs",
+              redoc_url="/redoc")
 
 
 limiter = Limiter(key_func=get_remote_address)
@@ -30,6 +32,8 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.get("/", dependencies=[])
+async def redirect_to_docs():
+    return RedirectResponse(url="/docs")
 
 async def redirect_to_docs():
     return RedirectResponse(url="/docs")
